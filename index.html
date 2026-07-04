@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="th">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <title>Water Sort Puzzle</title>
@@ -17,7 +17,7 @@
     min-height:100vh;
     background:radial-gradient(circle at top, #2a3142, #12151d);
     color:var(--text);
-    font-family:'Segoe UI', 'Tahoma', sans-serif;
+    font-family:'Segoe UI', Tahoma, sans-serif;
     display:flex;
     flex-direction:column;
     align-items:center;
@@ -31,8 +31,19 @@
   .subtitle{
     color:var(--muted);
     font-size:0.9rem;
-    margin-bottom:18px;
+    margin-bottom:14px;
     text-align:center;
+    max-width:480px;
+  }
+  .level-badge{
+    background:var(--panel);
+    border:1px solid #3a4152;
+    padding:6px 18px;
+    border-radius:999px;
+    font-weight:700;
+    font-size:1rem;
+    color:var(--accent);
+    margin-bottom:16px;
   }
   .toolbar{
     display:flex;
@@ -52,7 +63,9 @@
     transition:all .15s ease;
   }
   button:hover{ background:#2f3648; border-color:var(--accent); }
-  button.active{ background:var(--accent); color:#0f1117; border-color:var(--accent); font-weight:600; }
+  button:active{ transform:scale(0.96); }
+  button.primary{ background:var(--accent); color:#0f1117; border-color:var(--accent); font-weight:700; }
+  button:disabled{ opacity:0.4; cursor:not-allowed; }
   .stats{
     display:flex;
     gap:20px;
@@ -61,15 +74,24 @@
     color:var(--muted);
   }
   .stats b{ color:var(--text); }
+  #boardWrap{
+    position:relative;
+    min-height:220px;
+    width:100%;
+    display:flex;
+    justify-content:center;
+  }
   #board{
     display:flex;
     flex-wrap:wrap;
     gap:22px;
     justify-content:center;
-    max-width:900px;
+    max-width:920px;
+    transition:opacity .2s ease;
   }
+  #board.loading{ opacity:0.15; pointer-events:none; }
   .tube{
-    width:60px;
+    width:56px;
     height:200px;
     border:3px solid #4b5164;
     border-top:none;
@@ -81,12 +103,23 @@
     background:rgba(255,255,255,0.03);
     cursor:pointer;
     position:relative;
-    transition:transform .15s ease, box-shadow .15s ease;
+    transform-origin:bottom center;
+    transition:transform .22s cubic-bezier(.4,0,.2,1), box-shadow .22s ease;
   }
   .tube.selected{
     transform:translateY(-14px);
     box-shadow:0 0 0 2px var(--accent), 0 8px 18px rgba(0,0,0,0.4);
   }
+  .tube.tube-pouring{
+    transform:translateY(-10px) rotate(-24deg);
+    box-shadow:0 10px 20px rgba(0,0,0,0.35);
+    z-index:5;
+  }
+  .tube.tube-receiving{
+    transform:translateY(-6px) scale(1.05);
+    z-index:3;
+  }
+
   .tube-cap{
     position:absolute;
     top:-8px; left:-3px; right:-3px;
@@ -100,6 +133,11 @@
     flex:1;
     border-radius:6px;
     box-shadow: inset 0 -4px 6px rgba(0,0,0,0.25), inset 0 3px 4px rgba(255,255,255,0.25);
+    animation:dropIn .25s ease;
+  }
+  @keyframes dropIn{
+    0%{ transform:translateY(-14px) scaleY(0.6); opacity:0.3; }
+    100%{ transform:translateY(0) scaleY(1); opacity:1; }
   }
   #message{
     margin-top:22px;
@@ -107,62 +145,103 @@
     min-height:1.5em;
     font-weight:600;
     color:var(--accent);
+    text-align:center;
   }
+  #message.win{ animation:popMsg .4s ease; }
+  @keyframes popMsg{
+    0%{ transform:scale(0.7); opacity:0; }
+    60%{ transform:scale(1.08); opacity:1; }
+    100%{ transform:scale(1); }
+  }
+  .loading-overlay{
+    position:absolute;
+    inset:0;
+    display:none;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:14px;
+    color:var(--muted);
+    font-size:0.95rem;
+  }
+  .loading-overlay.active{ display:flex; }
+  .spinner{
+    width:38px; height:38px;
+    border:4px solid #3a4152;
+    border-top-color:var(--accent);
+    border-radius:50%;
+    animation:spin .8s linear infinite;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
   footer{
     margin-top:30px;
     color:var(--muted);
     font-size:0.78rem;
     text-align:center;
-    max-width:480px;
+    max-width:520px;
   }
 </style>
 </head>
 <body>
 
-<h1>🧪 Water Sort Puzzle</h1>
-<div class="subtitle">คลิกหลอดเพื่อเลือก แล้วคลิกอีกหลอดเพื่อเทของเหลว<br>เรียงให้แต่ละหลอดมีสีเดียวเพื่อชนะ</div>
+<h1>Water Sort Puzzle</h1>
+<div class="subtitle">Click a tube to select it, then click another tube to pour.<br>Sort every tube into a single color to win.</div>
+
+<div class="level-badge" id="levelBadge">Level 1</div>
 
 <div class="toolbar">
-  <button data-level="easy">ง่าย (4 สี)</button>
-  <button data-level="medium" class="active">ปานกลาง (6 สี)</button>
-  <button data-level="hard">ยาก (8 สี)</button>
-  <button id="newGameBtn">🔄 เกมใหม่</button>
-  <button id="undoBtn">↩ ย้อนกลับ</button>
-  <button id="hintBtn">💡 คำใบ้</button>
+  <button id="newBoardBtn">New Board</button>
+  <button id="nextLevelBtn" class="primary">Next Level →</button>
+  <button id="undoBtn">Undo</button>
+  <button id="hintBtn">Hint</button>
 </div>
 
 <div class="stats">
-  <div>ก้าว: <b id="moveCount">0</b></div>
-  <div>ที่ดีที่สุด: <b id="bestCount">-</b></div>
+  <div>Moves: <b id="moveCount">0</b></div>
+  <div>Best on this level: <b id="bestCount">-</b></div>
 </div>
 
-<div id="board"></div>
+<div id="boardWrap">
+  <div id="board"></div>
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="spinner"></div>
+    <div id="loadingText">Generating level...</div>
+  </div>
+</div>
+
 <div id="message"></div>
 
-<footer>เกมนี้สุ่มด่านใหม่ทุกครั้งโดยรับประกันว่าแก้ได้เสมอ (สร้างจากสถานะที่แก้แล้ว แล้วเทสลับแบบสุ่มย้อนกลับ)</footer>
+<footer>Levels get harder over time by adding more bottles — sometimes by splitting a color across two bottles — rather than just piling on new colors. Each board is generated and verified solvable on a background thread, so the game never freezes while a level loads.</footer>
 
 <script>
 const CAPACITY = 4;
 const PALETTE = [
   '#ef4444','#f97316','#eab308','#22c55e',
   '#06b6d4','#3b82f6','#8b5cf6','#ec4899',
-  '#14b8a6','#f43f5e'
+  '#14b8a6','#f43f5e','#a3e635','#fb7185'
 ];
 
-let LEVELS = {
-  easy:   { colors: 4, empty: 2 },
-  medium: { colors: 6, empty: 2 },
-  hard:   { colors: 8, empty: 3 }
-};
-
-let currentLevel = 'medium';
+let currentLevel = 1;
 let tubes = [];
 let selected = null;
 let moveCount = 0;
 let moveHistory = [];
 let bestScores = {};
+let generating = false;
 
-function cloneTubes(t){ return t.map(tube => tube.slice()); }
+// ---------- Level configuration ----------
+function getLevelConfig(level){
+  const numColors = Math.min(4 + Math.floor((level - 1) / 3), PALETTE.length);
+  const numEmpty = Math.max(2, 4 - Math.floor((level - 1) / 6));
+  // Chance any given color is "doubled" (needs two bottles worth of units at the
+  // start) — this is how later levels add more bottles without adding new colors.
+  const duplicateChance = Math.min(0.08 * Math.floor((level - 1) / 3), 0.5);
+  return { numColors, numEmpty, duplicateChance, level };
+}
+
+// ---------- Core pour mechanics (shared with the worker via a copied string) ----------
+function canPour(src, dst){ return canPourState(tubes, src, dst); }
+function pour(src, dst){ pourState(tubes, src, dst); }
 
 function canPourState(state, src, dst){
   if(src === dst) return false;
@@ -188,8 +267,7 @@ function pourState(state, src, dst){
   }
 }
 
-function canPour(src, dst){ return canPourState(tubes, src, dst); }
-function pour(src, dst){ pourState(tubes, src, dst); }
+function cloneTubes(t){ return t.map(tube => tube.slice()); }
 
 function isTubeSolved(tube){
   if(tube.length === 0) return true;
@@ -201,178 +279,291 @@ function isWon(){
   return tubes.every(isTubeSolved);
 }
 
+// ---------- Puzzle generation (runs on the main thread, in small yielding chunks) ----------
+// Note: this deliberately avoids Blob-based Web Workers. Sandboxed iframes (which is how
+// this game runs when embedded as an artifact) commonly block Worker creation from blob:
+// URLs, which would otherwise leave the game stuck on "Generating level...". Instead we do
+// the work directly, but in short bursts with awaited timeouts in between, so the browser
+// stays responsive (the spinner keeps animating and the tab doesn't lock up) even though
+// everything happens on the main thread.
+
 function stateKey(state){
   return state.map(t => t.join(',')).join('|');
 }
 
-// Bounded breadth-first search to confirm a generated board can actually be solved.
-function isSolvable(startState, maxStatesExplored){
+function isSolvableDFS(startState, maxNodes, deadline){
   if(startState.every(isTubeSolved)) return false; // already solved isn't a real puzzle
-  const startKey = stateKey(startState);
-  const visited = new Set([startKey]);
-  let queue = [startState];
-  let explored = 0;
+  const visited = new Set([stateKey(startState)]);
+  let nodes = 0;
   const n = startState.length;
 
-  while(queue.length && explored < maxStatesExplored){
-    const next = [];
-    for(const cur of queue){
-      explored++;
-      for(let i=0; i<n; i++){
-        for(let j=0; j<n; j++){
-          if(!canPourState(cur, i, j)) continue;
-          const child = cloneTubes(cur);
-          pourState(child, i, j);
-          if(child.every(isTubeSolved)) return true;
-          const key = stateKey(child);
-          if(visited.has(key)) continue;
-          visited.add(key);
-          next.push(child);
-        }
+  function dfs(state, depth){
+    nodes++;
+    if(nodes > maxNodes || Date.now() > deadline) return false;
+    if(state.every(isTubeSolved)) return true;
+    if(depth <= 0) return false;
+    const moves = [];
+    for(let i=0; i<n; i++){
+      for(let j=0; j<n; j++){
+        if(!canPourState(state, i, j)) continue;
+        moves.push([i, j, state[j].length > 0 ? 0 : 1]); // prefer consolidating moves
       }
-      if(explored >= maxStatesExplored) break;
     }
-    queue = next;
+    moves.sort((a, b) => a[2] - b[2]);
+    for(const [i, j] of moves){
+      const child = cloneTubes(state);
+      pourState(child, i, j);
+      const key = stateKey(child);
+      if(visited.has(key)) continue;
+      visited.add(key);
+      if(dfs(child, depth-1)) return true;
+      if(nodes > maxNodes || Date.now() > deadline) return false;
+    }
+    return false;
   }
-  return false;
+
+  const depthLimit = Math.max(70, startState.length * 8);
+  return dfs(startState, depthLimit);
 }
 
 // Build a random (but count-correct) board: a pool of color units gets
 // shuffled and dropped one-by-one into random tubes that still have room.
-function randomDistribute(numColors, numEmpty){
-  const totalTubes = numColors + numEmpty;
+function randomDistribute(colorUnitCounts, numEmpty){
   const pool = [];
-  for(let c=0; c<numColors; c++){
-    for(let i=0; i<CAPACITY; i++) pool.push(c);
-  }
+  colorUnitCounts.forEach((count, c) => {
+    for(let i=0; i<count; i++) pool.push(c);
+  });
   for(let i=pool.length-1; i>0; i--){
     const j = Math.floor(Math.random()*(i+1));
     [pool[i], pool[j]] = [pool[j], pool[i]];
   }
+  const totalTubes = pool.length / CAPACITY + numEmpty;
   const state = Array.from({length: totalTubes}, () => []);
   for(const unit of pool){
     const candidates = [];
-    for(let t=0; t<totalTubes; t++){
-      if(state[t].length < CAPACITY) candidates.push(t);
-    }
+    for(let t=0; t<totalTubes; t++){ if(state[t].length < CAPACITY) candidates.push(t); }
     const pick = candidates[Math.floor(Math.random()*candidates.length)];
     state[pick].push(unit);
   }
   return state;
 }
 
-function generatePuzzle(level){
-  const cfg = LEVELS[level];
-  const searchBudget = cfg.colors <= 4 ? 20000 : (cfg.colors <= 6 ? 12000 : 6000);
-  const maxAttempts = 30;
-
-  let lastCandidate = null;
-  for(let attempt=0; attempt<maxAttempts; attempt++){
-    const candidate = randomDistribute(cfg.colors, cfg.empty);
-    lastCandidate = candidate;
-    if(isSolvable(candidate, searchBudget)) return candidate;
+function buildColorUnitCounts(numColors, duplicateChance){
+  const counts = [];
+  for(let c=0; c<numColors; c++){
+    const doubled = Math.random() < duplicateChance;
+    counts.push(doubled ? CAPACITY*2 : CAPACITY);
   }
-  // Fallback (rare): couldn't confirm solvability within the search budget,
-  // hand back the last candidate rather than freezing the UI.
+  return counts;
+}
+
+function yieldToBrowser(){
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+async function generatePuzzleAsync(cfg){
+  const totalTubesEstimate = cfg.numColors + cfg.numEmpty + Math.ceil(cfg.numColors * cfg.duplicateChance);
+  const maxNodes = Math.max(1500, Math.min(15000, 700 * totalTubesEstimate));
+  const overallDeadline = Date.now() + 6000; // hard cap so we always land on something
+  let lastCandidate = null;
+
+  while(Date.now() < overallDeadline){
+    const counts = buildColorUnitCounts(cfg.numColors, cfg.duplicateChance);
+    const candidate = randomDistribute(counts, cfg.numEmpty);
+    lastCandidate = candidate;
+    const perAttemptDeadline = Math.min(overallDeadline, Date.now() + 250);
+    if(isSolvableDFS(candidate, maxNodes, perAttemptDeadline)){
+      return candidate;
+    }
+    await yieldToBrowser(); // let the spinner animate and the page stay responsive
+  }
   return lastCandidate;
 }
 
-function render(){
+function showLoading(show){
+  document.getElementById('loadingOverlay').classList.toggle('active', show);
+  document.getElementById('board').classList.toggle('loading', show);
+}
+
+async function requestNewPuzzle(level){
+  if(generating) return;
+  generating = true;
+  showLoading(true);
+  await yieldToBrowser(); // let the loading screen paint before we start crunching numbers
+
+  const cfg = getLevelConfig(level);
+  const state = await generatePuzzleAsync(cfg);
+
+  generating = false;
+  showLoading(false);
+  onPuzzleReady(state);
+}
+
+function onPuzzleReady(state){
+  tubes = state;
+  selected = null;
+  moveCount = 0;
+  moveHistory = [];
+  document.getElementById('message').textContent = '';
+  document.getElementById('message').classList.remove('win');
+  buildBoard();
+}
+
+// ---------- Rendering ----------
+// Tube wrapper elements are created once per puzzle and reused across moves.
+// Only the contents of tubes that actually changed get rebuilt, and selection
+// is just a class toggle — this is what keeps animations smooth instead of
+// restarting/interrupting on every click.
+let tubeEls = [];
+
+function buildBoard(){
   const board = document.getElementById('board');
   board.innerHTML = '';
-  tubes.forEach((tube, idx) => {
+  tubeEls = tubes.map((tube, idx) => {
     const tubeEl = document.createElement('div');
-    tubeEl.className = 'tube' + (selected === idx ? ' selected' : '');
+    tubeEl.className = 'tube';
     tubeEl.dataset.idx = idx;
 
     const cap = document.createElement('div');
     cap.className = 'tube-cap';
     tubeEl.appendChild(cap);
 
-    tube.forEach(colorIdx => {
-      const unit = document.createElement('div');
-      unit.className = 'unit';
-      unit.style.background = PALETTE[colorIdx];
-      tubeEl.appendChild(unit);
-    });
-    // fill remaining space with invisible spacers so tube height stays visually correct
-    for(let i=tube.length; i<CAPACITY; i++){
-      const spacer = document.createElement('div');
-      spacer.style.flex = '1';
-      tubeEl.appendChild(spacer);
-    }
+    const unitsWrap = document.createElement('div');
+    unitsWrap.className = 'units-wrap';
+    unitsWrap.style.display = 'contents';
+    tubeEl.appendChild(unitsWrap);
 
     tubeEl.addEventListener('click', () => onTubeClick(idx));
     board.appendChild(tubeEl);
+    return tubeEl;
   });
-
-  document.getElementById('moveCount').textContent = moveCount;
-  document.getElementById('bestCount').textContent = bestScores[currentLevel] ?? '-';
+  renderAllContents();
 }
 
+function renderTubeContents(idx){
+  const tubeEl = tubeEls[idx];
+  if(!tubeEl) return;
+  // remove everything except the cap (first child)
+  while(tubeEl.children.length > 1){
+    tubeEl.removeChild(tubeEl.lastChild);
+  }
+  const tube = tubes[idx];
+  tube.forEach(colorIdx => {
+    const unit = document.createElement('div');
+    unit.className = 'unit';
+    unit.style.background = PALETTE[colorIdx];
+    tubeEl.appendChild(unit);
+  });
+  for(let i=tube.length; i<CAPACITY; i++){
+    const spacer = document.createElement('div');
+    spacer.style.flex = '1';
+    tubeEl.appendChild(spacer);
+  }
+}
+
+function renderAllContents(){
+  tubes.forEach((_, idx) => renderTubeContents(idx));
+  updateSelectionClasses();
+  updateStats();
+}
+
+function updateSelectionClasses(){
+  tubeEls.forEach((el, idx) => {
+    el.classList.toggle('selected', selected === idx);
+  });
+}
+
+function updateStats(){
+  document.getElementById('moveCount').textContent = moveCount;
+  document.getElementById('bestCount').textContent = bestScores[currentLevel] ?? '-';
+  document.getElementById('levelBadge').textContent = 'Level ' + currentLevel;
+}
+
+// ---------- Interaction ----------
 function onTubeClick(idx){
-  const msg = document.getElementById('message');
+  if(generating) return;
   if(selected === null){
     if(tubes[idx].length === 0) return;
     selected = idx;
-    render();
+    updateSelectionClasses();
     return;
   }
   if(selected === idx){
     selected = null;
-    render();
+    updateSelectionClasses();
     return;
   }
   if(canPour(selected, idx)){
-    moveHistory.push(cloneTubes(tubes));
-    pour(selected, idx);
-    moveCount++;
-    selected = null;
-    render();
-    if(isWon()){
-      msg.textContent = '🎉 ชนะแล้ว! ใช้ทั้งหมด ' + moveCount + ' ก้าว';
-      if(!bestScores[currentLevel] || moveCount < bestScores[currentLevel]){
-        bestScores[currentLevel] = moveCount;
-      }
-      render();
-    } else {
-      msg.textContent = '';
-    }
+    animateAndPour(selected, idx);
   } else {
     selected = idx;
-    render();
+    updateSelectionClasses();
   }
 }
 
-function newGame(){
-  tubes = generatePuzzle(currentLevel);
+function animateAndPour(srcIdx, dstIdx){
+  const srcEl = tubeEls[srcIdx];
+  const dstEl = tubeEls[dstIdx];
   selected = null;
-  moveCount = 0;
-  moveHistory = [];
-  document.getElementById('message').textContent = '';
-  render();
+  updateSelectionClasses();
+  if(srcEl) srcEl.classList.add('tube-pouring');
+  if(dstEl) dstEl.classList.add('tube-receiving');
+
+  setTimeout(() => {
+    moveHistory.push(cloneTubes(tubes));
+    pour(srcIdx, dstIdx);
+    moveCount++;
+
+    renderTubeContents(srcIdx);
+    renderTubeContents(dstIdx);
+    updateStats();
+
+    // let the tilt/wobble ease back to neutral instead of snapping
+    if(srcEl) srcEl.classList.remove('tube-pouring');
+    if(dstEl) dstEl.classList.remove('tube-receiving');
+
+    const msg = document.getElementById('message');
+    if(isWon()){
+      msg.textContent = `Solved! Level ${currentLevel} in ${moveCount} moves.`;
+      msg.classList.add('win');
+      if(!bestScores[currentLevel] || moveCount < bestScores[currentLevel]){
+        bestScores[currentLevel] = moveCount;
+      }
+      updateStats();
+    } else {
+      msg.textContent = '';
+      msg.classList.remove('win');
+    }
+  }, 230);
+}
+
+function newBoard(){
+  requestNewPuzzle(currentLevel);
+}
+
+function nextLevel(){
+  currentLevel++;
+  requestNewPuzzle(currentLevel);
 }
 
 function undo(){
-  if(moveHistory.length === 0) return;
+  if(moveHistory.length === 0 || generating) return;
   tubes = moveHistory.pop();
   moveCount = Math.max(0, moveCount - 1);
   selected = null;
   document.getElementById('message').textContent = '';
-  render();
+  document.getElementById('message').classList.remove('win');
+  renderAllContents();
 }
 
 function hint(){
-  // find first valid non-trivial move (pouring into non-empty matching tube preferred)
+  if(generating) return;
   const n = tubes.length;
   let bestMove = null;
   for(let i=0;i<n;i++){
     for(let j=0;j<n;j++){
       if(i===j) continue;
-      if(canPour(i,j) && tubes[j].length > 0){
-        bestMove = [i,j];
-        break;
-      }
+      if(canPour(i,j) && tubes[j].length > 0){ bestMove = [i,j]; break; }
     }
     if(bestMove) break;
   }
@@ -386,29 +577,22 @@ function hint(){
     }
   }
   const msg = document.getElementById('message');
+  msg.classList.remove('win');
   if(bestMove){
     msg.style.color = '#fbbf24';
-    msg.textContent = `ลองเทจากหลอดที่ ${bestMove[0]+1} ไปหลอดที่ ${bestMove[1]+1} ดูสิ`;
-    setTimeout(()=>{ msg.style.color = 'var(--accent)'; }, 3000);
+    msg.textContent = `Try pouring from bottle ${bestMove[0]+1} into bottle ${bestMove[1]+1}.`;
+    setTimeout(() => { msg.style.color = 'var(--accent)'; }, 3000);
   } else {
-    msg.textContent = 'ไม่มีก้าวที่เดินได้แล้ว ลองย้อนกลับหรือเริ่มใหม่';
+    msg.textContent = 'No moves left — try Undo or a New Board.';
   }
 }
 
-document.querySelectorAll('[data-level]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('[data-level]').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    currentLevel = btn.dataset.level;
-    newGame();
-  });
-});
-
-document.getElementById('newGameBtn').addEventListener('click', newGame);
+document.getElementById('newBoardBtn').addEventListener('click', newBoard);
+document.getElementById('nextLevelBtn').addEventListener('click', nextLevel);
 document.getElementById('undoBtn').addEventListener('click', undo);
 document.getElementById('hintBtn').addEventListener('click', hint);
 
-newGame();
+requestNewPuzzle(currentLevel);
 </script>
 </body>
 </html>
