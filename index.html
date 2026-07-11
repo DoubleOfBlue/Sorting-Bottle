@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -66,6 +65,7 @@
   button:hover{ background:#2f3648; border-color:var(--accent); }
   button:active{ transform:scale(0.96); }
   button.primary{ background:var(--accent); color:#0f1117; border-color:var(--accent); font-weight:700; }
+  button.danger{ background:#dc2626; color:#fff; border-color:#dc2626; font-weight:700; }
   button:disabled{ opacity:0.4; cursor:not-allowed; }
   .stats{
     display:flex;
@@ -135,10 +135,26 @@
     border-radius:6px;
     box-shadow: inset 0 -4px 6px rgba(0,0,0,0.25), inset 0 3px 4px rgba(255,255,255,0.25);
     animation:dropIn .25s ease;
+    transform-origin:top center;
+  }
+  .unit.draining{
+    opacity:0.3;
+    transform:scaleY(0.55);
+    transition:opacity .2s ease, transform .2s ease;
   }
   @keyframes dropIn{
     0%{ transform:translateY(-14px) scaleY(0.6); opacity:0.3; }
     100%{ transform:translateY(0) scaleY(1); opacity:1; }
+  }
+  .droplet{
+    position:absolute;
+    top:0; left:0;
+    width:9px; height:9px;
+    border-radius:50%;
+    box-shadow:0 0 6px rgba(255,255,255,0.5);
+    pointer-events:none;
+    z-index:30;
+    will-change:transform;
   }
   #message{
     margin-top:22px;
@@ -191,10 +207,13 @@
 <div class="level-badge" id="levelBadge">Level 1</div>
 
 <div class="toolbar">
+  <button id="prevLevelBtn">← Previous Level</button>
   <button id="newBoardBtn">New Board</button>
-  <button id="nextLevelBtn" class="primary">Next Level →</button>
+  <button id="nextLevelBtn" class="primary" disabled>Next Level →</button>
   <button id="undoBtn">Undo</button>
   <button id="hintBtn">Hint</button>
+  <button id="muteBtn">🔊</button>
+  <button id="resetBtn">Reset Progress</button>
 </div>
 
 <div class="stats">
@@ -212,15 +231,24 @@
 
 <div id="message"></div>
 
-<footer>Levels get harder over time by adding more bottles — sometimes by splitting a color across two bottles — rather than just piling on new colors. Each board is generated and verified solvable on a background thread, so the game never freezes while a level loads.</footer>
+<footer>Levels get harder over time by adding more bottles — sometimes by splitting a color across two bottles — rather than just piling on new colors. Your progress saves automatically as you play; use Reset Progress to start over from Level 1.</footer>
 
 <script>
 const CAPACITY = 4;
+// A small, deliberately spread-out palette (distinct hues AND distinct lightness)
+// so colors stay easy to tell apart even at a glance — this is why color count
+// is capped below rather than left to grow indefinitely.
 const PALETTE = [
-  '#ef4444','#f97316','#eab308','#22c55e',
-  '#06b6d4','#3b82f6','#8b5cf6','#ec4899',
-  '#14b8a6','#f43f5e','#a3e635','#fb7185'
+  '#e53935', // red
+  '#fb8c00', // orange
+  '#fdd835', // yellow
+  '#43a047', // green
+  '#00acc1', // cyan
+  '#3949ab', // indigo
+  '#8e24aa', // purple
+  '#d81b60'  // pink
 ];
+const MAX_COLORS = PALETTE.length;
 
 let currentLevel = 1;
 let tubes = [];
@@ -232,15 +260,218 @@ let generating = false;
 
 // ---------- Level configuration ----------
 function getLevelConfig(level){
-  const numColors = Math.min(4 + Math.floor((level - 1) / 3), PALETTE.length);
+  const numColors = Math.min(4 + Math.floor((level - 1) / 3), MAX_COLORS);
   const numEmpty = Math.max(2, 4 - Math.floor((level - 1) / 6));
   // Chance any given color is "doubled" (needs two bottles worth of units at the
   // start) — this is how later levels add more bottles without adding new colors.
-  const duplicateChance = Math.min(0.08 * Math.floor((level - 1) / 3), 0.5);
+  const duplicateChance = Math.min(0.08 * Math.floor((level - 1) / 3), 0.6);
   return { numColors, numEmpty, duplicateChance, level };
 }
 
-// ---------- Core pour mechanics (shared with the worker via a copied string) ----------
+// ---------- Sound effects ----------
+// Synthesized with the Web Audio API (no audio files needed). All sounds are
+// triggered from click handlers, so browsers' autoplay restrictions don't apply.
+let audioCtx = null;
+let soundEnabled = true;
+
+function getAudioCtx(){
+  if(!soundEnabled) return null;
+  if(!audioCtx){
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch(err){
+      audioCtx = null;
+    }
+  }
+  if(audioCtx && audioCtx.state === 'suspended'){
+    audioCtx.resume();
+  }
+  return audioCtx;
+}
+
+function playPourSound(){
+  const ctx = getAudioCtx();
+  if(!ctx) return;
+  const now = ctx.currentTime;
+
+  const masterGain = ctx.createGain();
+  masterGain.gain.value = 0.18;
+  const warmth = ctx.createBiquadFilter();
+  warmth.type = 'lowpass';
+  warmth.frequency.value = 1100;
+  warmth.connect(masterGain).connect(ctx.destination);
+
+  // A couple of soft, overlapping low "glug" tones for a liquid gurgle feel
+  [[0, 260, 165], [0.09, 215, 145]].forEach(([delay, startFreq, endFreq]) => {
+    const t = now + delay;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(startFreq, t);
+    osc.frequency.exponentialRampToValueAtTime(endFreq, t + 0.16);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(1, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+    osc.connect(g).connect(warmth);
+    osc.start(t);
+    osc.stop(t + 0.22);
+  });
+
+  // A short filtered noise burst for a soft splash texture
+  const bufferSize = Math.floor(ctx.sampleRate * 0.15);
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for(let i=0; i<bufferSize; i++){ data[i] = (Math.random()*2 - 1) * (1 - i/bufferSize); }
+  const noise = ctx.createBufferSource();
+  noise.buffer = buffer;
+  const noiseFilter = ctx.createBiquadFilter();
+  noiseFilter.type = 'lowpass';
+  noiseFilter.frequency.value = 650;
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.value = 0.45;
+  noise.connect(noiseFilter).connect(noiseGain).connect(masterGain);
+  noise.start(now + 0.05);
+}
+
+function playClickSound(){
+  const ctx = getAudioCtx();
+  if(!ctx) return;
+  const now = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 900;
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(300, now);
+  osc.frequency.exponentialRampToValueAtTime(240, now + 0.08);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.08, now + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+  osc.connect(filter).connect(gain).connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + 0.13);
+}
+
+function playWinSound(){
+  const ctx = getAudioCtx();
+  if(!ctx) return;
+  const now = ctx.currentTime;
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 2000;
+  filter.connect(ctx.destination);
+  const notes = [261.63, 329.63, 392.00, 523.25]; // C4 E4 G4 C5 — a full octave lower than before
+  notes.forEach((freq, i) => {
+    const t = now + i * 0.11;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.16, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+    osc.connect(g).connect(filter);
+    osc.start(t);
+    osc.stop(t + 0.52);
+  });
+}
+
+function toggleMute(){
+  soundEnabled = !soundEnabled;
+  document.getElementById('muteBtn').textContent = soundEnabled ? '🔊' : '🔇';
+}
+
+// ---------- Fluid flow visual ----------
+// A handful of small droplets fly from the source tube's mouth to the
+// destination tube's mouth along a gentle arc, giving the pour a sense of
+// actual liquid motion rather than an instant swap.
+function spawnPourStream(srcIdx, dstIdx, colorHex, durationMs){
+  const boardWrap = document.getElementById('boardWrap');
+  const srcEl = tubeEls[srcIdx];
+  const dstEl = tubeEls[dstIdx];
+  if(!boardWrap || !srcEl || !dstEl) return;
+
+  const wrapRect = boardWrap.getBoundingClientRect();
+  const srcRect = srcEl.getBoundingClientRect();
+  const dstRect = dstEl.getBoundingClientRect();
+
+  const startX = srcRect.left + srcRect.width * 0.7 - wrapRect.left;
+  const startY = srcRect.top - wrapRect.top + 6;
+  const endX = dstRect.left + dstRect.width * 0.5 - wrapRect.left;
+  const endY = dstRect.top - wrapRect.top + 10;
+  const midX = (startX + endX) / 2;
+  const midY = Math.min(startY, endY) - 34;
+
+  const dropletCount = 4;
+  for(let i=0; i<dropletCount; i++){
+    const delay = i * (durationMs * 0.14);
+    const drop = document.createElement('div');
+    drop.className = 'droplet';
+    drop.style.background = colorHex;
+    boardWrap.appendChild(drop);
+
+    const anim = drop.animate([
+      { transform: `translate(${startX}px, ${startY}px) scale(0.6)`, opacity: 0 },
+      { transform: `translate(${startX}px, ${startY - 4}px) scale(1)`, opacity: 1, offset: 0.15 },
+      { transform: `translate(${midX}px, ${midY}px) scale(1.05)`, opacity: 1, offset: 0.55 },
+      { transform: `translate(${endX}px, ${endY}px) scale(0.7)`, opacity: 0.3 }
+    ], {
+      duration: durationMs * 0.8,
+      delay,
+      easing: 'ease-in-out',
+      fill: 'forwards'
+    });
+    anim.onfinish = () => drop.remove();
+  }
+}
+
+// ---------- Auto-save (persistent artifact storage) ----------
+// Uses window.storage (persists across sessions for this artifact) rather than
+// localStorage/sessionStorage, which aren't supported here. Every save/load is
+// guarded so the game still works fine if storage isn't available for some reason.
+const SAVE_KEY = 'water-sort-save';
+const hasStorage = typeof window !== 'undefined' && window.storage && typeof window.storage.get === 'function';
+let saveDebounceTimer = null;
+
+function scheduleSave(){
+  if(!hasStorage) return;
+  if(saveDebounceTimer) clearTimeout(saveDebounceTimer);
+  saveDebounceTimer = setTimeout(saveProgress, 400);
+}
+
+async function saveProgress(){
+  if(!hasStorage) return;
+  try{
+    const payload = {
+      currentLevel,
+      tubes,
+      moveCount,
+      moveHistory: moveHistory.slice(-50), // cap size, older undo history isn't essential
+      bestScores
+    };
+    await window.storage.set(SAVE_KEY, JSON.stringify(payload), false);
+  } catch(err){
+    // Storage can fail (rate limit, etc) — losing autosave isn't worth interrupting play
+  }
+}
+
+async function loadProgress(){
+  if(!hasStorage) return null;
+  try{
+    const result = await window.storage.get(SAVE_KEY, false);
+    if(result && result.value) return JSON.parse(result.value);
+  } catch(err){
+    // No save yet, or storage unavailable — that's fine, just start fresh
+  }
+  return null;
+}
+
+async function clearProgress(){
+  if(!hasStorage) return;
+  try{ await window.storage.delete(SAVE_KEY, false); } catch(err){ /* nothing saved yet */ }
+}
+
 function canPour(src, dst){ return canPourState(tubes, src, dst); }
 function pour(src, dst){ pourState(tubes, src, dst); }
 
@@ -268,6 +499,18 @@ function pourState(state, src, dst){
   }
 }
 
+function getPourAmount(srcIdx, dstIdx){
+  const s = tubes[srcIdx], d = tubes[dstIdx];
+  if(s.length === 0) return 0;
+  const topColor = s[s.length-1];
+  let count = 0;
+  for(let i = s.length-1; i>=0; i--){
+    if(s[i] === topColor) count++; else break;
+  }
+  const space = CAPACITY - d.length;
+  return Math.min(count, space);
+}
+
 function cloneTubes(t){ return t.map(tube => tube.slice()); }
 
 function isTubeSolved(tube){
@@ -292,39 +535,80 @@ function stateKey(state){
   return state.map(t => t.join(',')).join('|');
 }
 
-function isSolvableDFS(startState, maxNodes, deadline){
+function isSolvableGreedy(startState, maxNodes, deadline){
   if(startState.every(isTubeSolved)) return false; // already solved isn't a real puzzle
+
+  // Heuristic: total number of "extra" same-color runs across all tubes beyond
+  // one run per non-empty tube. A solved board scores 0. Guiding the search
+  // toward states that reduce this is far faster than blind depth-first search.
+  function heuristic(state){
+    let h = 0;
+    for(const tube of state){
+      if(tube.length === 0) continue;
+      let runs = 1;
+      for(let i=1; i<tube.length; i++){ if(tube[i] !== tube[i-1]) runs++; }
+      h += (runs - 1);
+    }
+    return h;
+  }
+
+  class MinHeap{
+    constructor(){ this.items = []; }
+    get size(){ return this.items.length; }
+    push(item){
+      this.items.push(item);
+      let i = this.items.length - 1;
+      while(i > 0){
+        const parent = (i - 1) >> 1;
+        if(this.items[parent].h <= this.items[i].h) break;
+        [this.items[parent], this.items[i]] = [this.items[i], this.items[parent]];
+        i = parent;
+      }
+    }
+    pop(){
+      const top = this.items[0];
+      const last = this.items.pop();
+      if(this.items.length > 0){
+        this.items[0] = last;
+        let i = 0;
+        while(true){
+          const l = 2*i+1, r = 2*i+2;
+          let smallest = i;
+          if(l < this.items.length && this.items[l].h < this.items[smallest].h) smallest = l;
+          if(r < this.items.length && this.items[r].h < this.items[smallest].h) smallest = r;
+          if(smallest === i) break;
+          [this.items[i], this.items[smallest]] = [this.items[smallest], this.items[i]];
+          i = smallest;
+        }
+      }
+      return top;
+    }
+  }
+
   const visited = new Set([stateKey(startState)]);
+  const heap = new MinHeap();
+  heap.push({ state: startState, h: heuristic(startState) });
   let nodes = 0;
   const n = startState.length;
 
-  function dfs(state, depth){
+  while(heap.size > 0){
     nodes++;
     if(nodes > maxNodes || Date.now() > deadline) return false;
-    if(state.every(isTubeSolved)) return true;
-    if(depth <= 0) return false;
-    const moves = [];
+    const { state } = heap.pop();
     for(let i=0; i<n; i++){
       for(let j=0; j<n; j++){
         if(!canPourState(state, i, j)) continue;
-        moves.push([i, j, state[j].length > 0 ? 0 : 1]); // prefer consolidating moves
+        const child = cloneTubes(state);
+        pourState(child, i, j);
+        if(child.every(isTubeSolved)) return true;
+        const key = stateKey(child);
+        if(visited.has(key)) continue;
+        visited.add(key);
+        heap.push({ state: child, h: heuristic(child) });
       }
     }
-    moves.sort((a, b) => a[2] - b[2]);
-    for(const [i, j] of moves){
-      const child = cloneTubes(state);
-      pourState(child, i, j);
-      const key = stateKey(child);
-      if(visited.has(key)) continue;
-      visited.add(key);
-      if(dfs(child, depth-1)) return true;
-      if(nodes > maxNodes || Date.now() > deadline) return false;
-    }
-    return false;
   }
-
-  const depthLimit = Math.max(70, startState.length * 8);
-  return dfs(startState, depthLimit);
+  return false;
 }
 
 // Build a random (but count-correct) board: a pool of color units gets
@@ -364,16 +648,16 @@ function yieldToBrowser(){
 
 async function generatePuzzleAsync(cfg){
   const totalTubesEstimate = cfg.numColors + cfg.numEmpty + Math.ceil(cfg.numColors * cfg.duplicateChance);
-  const maxNodes = Math.max(1500, Math.min(15000, 700 * totalTubesEstimate));
-  const overallDeadline = Date.now() + 6000; // hard cap so we always land on something
+  const maxNodes = Math.max(2000, Math.min(20000, 900 * totalTubesEstimate));
+  const overallDeadline = Date.now() + 4000; // hard cap so we always land on something
   let lastCandidate = null;
 
   while(Date.now() < overallDeadline){
     const counts = buildColorUnitCounts(cfg.numColors, cfg.duplicateChance);
     const candidate = randomDistribute(counts, cfg.numEmpty);
     lastCandidate = candidate;
-    const perAttemptDeadline = Math.min(overallDeadline, Date.now() + 250);
-    if(isSolvableDFS(candidate, maxNodes, perAttemptDeadline)){
+    const perAttemptDeadline = Math.min(overallDeadline, Date.now() + 400);
+    if(isSolvableGreedy(candidate, maxNodes, perAttemptDeadline)){
       return candidate;
     }
     await yieldToBrowser(); // let the spinner animate and the page stay responsive
@@ -408,6 +692,7 @@ function onPuzzleReady(state){
   document.getElementById('message').textContent = '';
   document.getElementById('message').classList.remove('win');
   buildBoard();
+  scheduleSave();
 }
 
 // ---------- Rendering ----------
@@ -441,7 +726,7 @@ function buildBoard(){
   renderAllContents();
 }
 
-function renderTubeContents(idx){
+function renderTubeContents(idx, newUnitCount = 0){
   const tubeEl = tubeEls[idx];
   if(!tubeEl) return;
   // remove everything except the cap (first child)
@@ -449,10 +734,14 @@ function renderTubeContents(idx){
     tubeEl.removeChild(tubeEl.lastChild);
   }
   const tube = tubes[idx];
-  tube.forEach(colorIdx => {
+  const newFromIndex = tube.length - newUnitCount;
+  tube.forEach((colorIdx, i) => {
     const unit = document.createElement('div');
     unit.className = 'unit';
     unit.style.background = PALETTE[colorIdx];
+    if(newUnitCount > 0 && i >= newFromIndex){
+      unit.style.animationDelay = ((i - newFromIndex) * 45) + 'ms';
+    }
     tubeEl.appendChild(unit);
   });
   for(let i=tube.length; i<CAPACITY; i++){
@@ -478,6 +767,8 @@ function updateStats(){
   document.getElementById('moveCount').textContent = moveCount;
   document.getElementById('bestCount').textContent = bestScores[currentLevel] ?? '-';
   document.getElementById('levelBadge').textContent = 'Level ' + currentLevel;
+  document.getElementById('nextLevelBtn').disabled = !isWon();
+  document.getElementById('prevLevelBtn').disabled = currentLevel <= 1;
 }
 
 // ---------- Interaction ----------
@@ -486,6 +777,7 @@ function onTubeClick(idx){
   if(selected === null){
     if(tubes[idx].length === 0) return;
     selected = idx;
+    playClickSound();
     updateSelectionClasses();
     return;
   }
@@ -498,6 +790,7 @@ function onTubeClick(idx){
     animateAndPour(selected, idx);
   } else {
     selected = idx;
+    playClickSound();
     updateSelectionClasses();
   }
 }
@@ -505,10 +798,23 @@ function onTubeClick(idx){
 function animateAndPour(srcIdx, dstIdx){
   const srcEl = tubeEls[srcIdx];
   const dstEl = tubeEls[dstIdx];
+  const pourColor = PALETTE[tubes[srcIdx][tubes[srcIdx].length - 1]];
+  const moveUnits = getPourAmount(srcIdx, dstIdx);
+  const tiltDuration = 260;
+
   selected = null;
   updateSelectionClasses();
   if(srcEl) srcEl.classList.add('tube-pouring');
   if(dstEl) dstEl.classList.add('tube-receiving');
+
+  playPourSound();
+  spawnPourStream(srcIdx, dstIdx, pourColor, tiltDuration);
+
+  // mark the units about to leave the source tube so they visibly drain first
+  if(srcEl){
+    const realUnits = Array.from(srcEl.children).slice(1, 1 + tubes[srcIdx].length);
+    realUnits.slice(-moveUnits).forEach(u => u.classList.add('draining'));
+  }
 
   setTimeout(() => {
     moveHistory.push(cloneTubes(tubes));
@@ -516,7 +822,7 @@ function animateAndPour(srcIdx, dstIdx){
     moveCount++;
 
     renderTubeContents(srcIdx);
-    renderTubeContents(dstIdx);
+    renderTubeContents(dstIdx, moveUnits); // stagger the newly-arrived units
     updateStats();
 
     // let the tilt/wobble ease back to neutral instead of snapping
@@ -527,6 +833,7 @@ function animateAndPour(srcIdx, dstIdx){
     if(isWon()){
       msg.textContent = `Solved! Level ${currentLevel} in ${moveCount} moves.`;
       msg.classList.add('win');
+      playWinSound();
       if(!bestScores[currentLevel] || moveCount < bestScores[currentLevel]){
         bestScores[currentLevel] = moveCount;
       }
@@ -535,7 +842,8 @@ function animateAndPour(srcIdx, dstIdx){
       msg.textContent = '';
       msg.classList.remove('win');
     }
-  }, 230);
+    scheduleSave();
+  }, tiltDuration);
 }
 
 function newBoard(){
@@ -543,7 +851,48 @@ function newBoard(){
 }
 
 function nextLevel(){
+  if(!isWon()) return; // guard, even though the button is disabled until solved
   currentLevel++;
+  requestNewPuzzle(currentLevel);
+}
+
+function previousLevel(){
+  if(currentLevel <= 1) return;
+  currentLevel--;
+  requestNewPuzzle(currentLevel);
+}
+
+// Two-step confirm built into the button itself (no native confirm() dialog,
+// since sandboxed artifact frames can block those) — click once to arm it,
+// click again within a few seconds to actually reset.
+let resetArmed = false;
+let resetArmTimer = null;
+
+function handleResetClick(){
+  const btn = document.getElementById('resetBtn');
+  if(!resetArmed){
+    resetArmed = true;
+    btn.textContent = 'Click again to confirm';
+    btn.classList.add('danger');
+    resetArmTimer = setTimeout(() => {
+      resetArmed = false;
+      btn.textContent = 'Reset Progress';
+      btn.classList.remove('danger');
+    }, 3000);
+    return;
+  }
+  clearTimeout(resetArmTimer);
+  resetArmed = false;
+  btn.textContent = 'Reset Progress';
+  btn.classList.remove('danger');
+  performReset();
+}
+
+async function performReset(){
+  currentLevel = 1;
+  bestScores = {};
+  moveHistory = [];
+  await clearProgress();
   requestNewPuzzle(currentLevel);
 }
 
@@ -555,6 +904,7 @@ function undo(){
   document.getElementById('message').textContent = '';
   document.getElementById('message').classList.remove('win');
   renderAllContents();
+  scheduleSave();
 }
 
 function hint(){
@@ -588,12 +938,36 @@ function hint(){
   }
 }
 
+document.getElementById('prevLevelBtn').addEventListener('click', previousLevel);
 document.getElementById('newBoardBtn').addEventListener('click', newBoard);
 document.getElementById('nextLevelBtn').addEventListener('click', nextLevel);
 document.getElementById('undoBtn').addEventListener('click', undo);
 document.getElementById('hintBtn').addEventListener('click', hint);
+document.getElementById('muteBtn').addEventListener('click', toggleMute);
+document.getElementById('resetBtn').addEventListener('click', handleResetClick);
 
-requestNewPuzzle(currentLevel);
+async function init(){
+  showLoading(true);
+  const saved = await loadProgress();
+  showLoading(false);
+
+  if(saved && Array.isArray(saved.tubes) && saved.tubes.length > 0){
+    currentLevel = saved.currentLevel || 1;
+    tubes = saved.tubes;
+    moveCount = saved.moveCount || 0;
+    moveHistory = saved.moveHistory || [];
+    bestScores = saved.bestScores || {};
+    selected = null;
+    document.getElementById('message').textContent = '';
+    document.getElementById('message').classList.remove('win');
+    buildBoard();
+  } else {
+    await requestNewPuzzle(currentLevel);
+  }
+}
+
+init();
+
 </script>
 </body>
 </html>
